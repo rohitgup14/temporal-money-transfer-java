@@ -49,13 +49,18 @@ dependencies {
     testImplementation "org.junit.jupiter:junit-jupiter-api"
     testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine"
     testRuntimeOnly "org.junit.vintage:junit-vintage-engine"
+    // JUnit Platform launcher required for Gradle 9.0+
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 
-    dependencies {
-        errorproneJavac('com.google.errorprone:javac:9+181-r4173-1')
-        if (JavaVersion.current().isJava11Compatible()) {
-            errorprone('com.google.errorprone:error_prone_core:2.20.0')
-        } else {
-            errorprone('com.google.errorprone:error_prone_core:2.20.0')
+    // Error Prone dependencies - only added if Error Prone plugin is applied (Java < 25)
+    if (JavaVersion.current() < JavaVersion.VERSION_25) {
+        dependencies {
+            if (JavaVersion.current().isJava11Compatible()) {
+                errorprone('com.google.errorprone:error_prone_core:2.32.0')
+            } else {
+                errorproneJavac('com.google.errorprone:javac:9+181-r4173-1')
+                errorprone('com.google.errorprone:error_prone_core:2.20.0')
+            }
         }
     }
 }
