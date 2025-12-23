@@ -22,10 +22,14 @@ package io.temporal.samples.moneytransfer;
 import io.temporal.activity.Activity;
 import io.temporal.activity.ActivityExecutionContext;
 import io.temporal.activity.ActivityInfo;
+import io.temporal.samples.moneytransfer.database.LockedTransactionRepository;
+import io.temporal.samples.moneytransfer.database.TransactionEntity;
 import io.temporal.samples.moneytransfer.dataclasses.ChargeResponseObj;
 import io.temporal.samples.moneytransfer.dataclasses.ExecutionScenarioObj;
 import io.temporal.samples.moneytransfer.web.ServerInfo;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.sql.SQLException;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -34,6 +38,11 @@ import org.slf4j.LoggerFactory;
 
 public class AccountTransferActivitiesImpl implements AccountTransferActivities {
   private static final Logger log = LoggerFactory.getLogger(AccountTransferActivitiesImpl.class);
+  private final LockedTransactionRepository lockedTransactionRepository;
+
+  public AccountTransferActivitiesImpl() {
+    this.lockedTransactionRepository = new LockedTransactionRepository();
+  }
 
   @Override
   public Boolean validate(ExecutionScenarioObj scenario) {
@@ -60,6 +69,36 @@ public class AccountTransferActivitiesImpl implements AccountTransferActivities 
     ActivityExecutionContext ctx = Activity.getExecutionContext();
     ActivityInfo info = ctx.getInfo();
 
+    // Persist withdraw transaction to database with distributed locking
+    try {
+      TransactionEntity transaction = new TransactionEntity();
+      transaction.setWorkflowId(info.getWorkflowId());
+      // workflowRunId is optional - ActivityInfo doesn't provide it directly
+      transaction.setWorkflowRunId(null);
+      transaction.setTransactionType(TransactionEntity.TransactionType.WITHDRAW);
+      transaction.setAmount(BigDecimal.valueOf(amountDollars));
+      transaction.setStatus(TransactionEntity.TransactionStatus.PENDING);
+      transaction.setScenario(scenario != null ? scenario.name() : null);
+      
+      // Derive group ID for locking (use workflow ID as fallback)
+      String groupId = LockedTransactionRepository.deriveGroupId(transaction);
+      String requesterId = info.getWorkflowId() + "-" + info.getActivityId();
+      
+      lockedTransactionRepository.save(transaction, groupId, requesterId);
+      log.info("Saved withdraw transaction: {} with lock group: {}", transaction.getId(), groupId);
+      
+      // Update status to completed after successful withdraw (with lock protection)
+      transaction.setStatus(TransactionEntity.TransactionStatus.COMPLETED);
+      lockedTransactionRepository.updateWithOptimisticLocking(transaction, groupId, requesterId);
+      log.info("Updated withdraw transaction to completed: {}", transaction.getId());
+    } catch (SQLException e) {
+      log.error("Failed to persist withdraw transaction", e);
+      // Don't fail the activity if database write fails, but log the error
+    } catch (Exception e) {
+      log.error("Failed to acquire lock or persist withdraw transaction", e);
+      // Don't fail the activity if lock acquisition fails, but log the error
+    }
+
     if (scenario == ExecutionScenarioObj.API_DOWNTIME) {
       log.info("\n\n*** Simulating API Downtime\n");
       if (info.getAttempt() < 5) {
@@ -79,6 +118,31 @@ public class AccountTransferActivitiesImpl implements AccountTransferActivities 
 
     log.info("\n\nAPI /deposit amount = " + amountDollars + " \n");
 
+    ActivityExecutionContext ctx = Activity.getExecutionContext();
+    ActivityInfo info = ctx.getInfo();
+
+    String requesterId = info.getWorkflowId() + "-" + info.getActivityId();
+    
+    // Check for existing transaction with same idempotency key to ensure idempotency
+    TransactionEntity existingTransaction = null;
+    try {
+      if (idempotencyKey != null && !idempotencyKey.isEmpty()) {
+        existingTransaction =
+            lockedTransactionRepository.findByIdempotencyKey(idempotencyKey).orElse(null);
+        if (existingTransaction != null
+            && existingTransaction.getStatus()
+                == TransactionEntity.TransactionStatus.COMPLETED) {
+          log.info(
+              "Found existing completed deposit transaction with idempotency key: {}",
+              idempotencyKey);
+          return new ChargeResponseObj(existingTransaction.getChargeId());
+        }
+      }
+    } catch (SQLException e) {
+      log.error("Failed to check for existing deposit transaction", e);
+      // Continue with new transaction creation
+    }
+
     if (scenario == ExecutionScenarioObj.INVALID_ACCOUNT) {
       InvalidAccountException invalidAccountException =
           new InvalidAccountException("Invalid Account");
@@ -87,12 +151,86 @@ public class AccountTransferActivitiesImpl implements AccountTransferActivities 
 
     ChargeResponseObj response = new ChargeResponseObj("example-charge-id");
 
+    // Persist deposit transaction to database with distributed locking
+    try {
+      TransactionEntity transaction;
+      if (existingTransaction != null) {
+        // Update existing transaction with lock protection
+        transaction = existingTransaction;
+        String groupId = LockedTransactionRepository.deriveGroupId(transaction);
+        
+        transaction.setStatus(TransactionEntity.TransactionStatus.COMPLETED);
+        transaction.setChargeId(response.getChargeId());
+        boolean updated =
+            lockedTransactionRepository.updateWithOptimisticLocking(transaction, groupId, requesterId);
+        if (!updated) {
+          // Retry update in case of version conflict (with lock protection)
+          lockedTransactionRepository.updateWithRetry(
+              transaction.getId(),
+              t -> {
+                t.setStatus(TransactionEntity.TransactionStatus.COMPLETED);
+                t.setChargeId(response.getChargeId());
+              },
+              3,
+              groupId,
+              requesterId);
+        }
+      } else {
+        // Create new transaction with lock protection
+        transaction = new TransactionEntity();
+        transaction.setWorkflowId(info.getWorkflowId());
+        // workflowRunId is optional - ActivityInfo doesn't provide it directly
+        transaction.setWorkflowRunId(null);
+        transaction.setTransactionType(TransactionEntity.TransactionType.DEPOSIT);
+        transaction.setAmount(BigDecimal.valueOf(amountDollars));
+        transaction.setIdempotencyKey(idempotencyKey);
+        transaction.setChargeId(response.getChargeId());
+        transaction.setStatus(TransactionEntity.TransactionStatus.COMPLETED);
+        transaction.setScenario(scenario != null ? scenario.name() : null);
+        
+        String groupId = LockedTransactionRepository.deriveGroupId(transaction);
+        lockedTransactionRepository.save(transaction, groupId, requesterId);
+        log.info("Saved deposit transaction: {} with lock group: {}", transaction.getId(), groupId);
+      }
+    } catch (SQLException e) {
+      log.error("Failed to persist deposit transaction", e);
+      // Don't fail the activity if database write fails, but log the error
+    } catch (Exception e) {
+      log.error("Failed to acquire lock or persist deposit transaction", e);
+      // Don't fail the activity if lock acquisition fails, but log the error
+    }
+
     return response;
   }
 
   @Override
   public boolean undoWithdraw(float amountDollars) {
     log.info("\n\nAPI /undoWithdraw amount = " + amountDollars + " \n");
+
+    ActivityExecutionContext ctx = Activity.getExecutionContext();
+    ActivityInfo info = ctx.getInfo();
+
+    // Persist undo withdraw transaction to database with distributed locking
+    try {
+      TransactionEntity transaction = new TransactionEntity();
+      transaction.setWorkflowId(info.getWorkflowId());
+      // workflowRunId is optional - ActivityInfo doesn't provide it directly
+      transaction.setWorkflowRunId(null);
+      transaction.setTransactionType(TransactionEntity.TransactionType.UNDO_WITHDRAW);
+      transaction.setAmount(BigDecimal.valueOf(amountDollars));
+      transaction.setStatus(TransactionEntity.TransactionStatus.COMPLETED);
+      
+      String groupId = LockedTransactionRepository.deriveGroupId(transaction);
+      String requesterId = info.getWorkflowId() + "-" + info.getActivityId();
+      lockedTransactionRepository.save(transaction, groupId, requesterId);
+      log.info("Saved undo withdraw transaction: {} with lock group: {}", transaction.getId(), groupId);
+    } catch (SQLException e) {
+      log.error("Failed to persist undo withdraw transaction", e);
+      // Don't fail the activity if database write fails, but log the error
+    } catch (Exception e) {
+      log.error("Failed to acquire lock or persist undo withdraw transaction", e);
+      // Don't fail the activity if lock acquisition fails, but log the error
+    }
 
     return true;
   }

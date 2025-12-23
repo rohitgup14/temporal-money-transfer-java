@@ -19,6 +19,7 @@
 
 package io.temporal.samples.moneytransfer;
 
+import io.temporal.samples.moneytransfer.locking.LockManagerWorkflowImpl;
 import io.temporal.samples.moneytransfer.web.ServerInfo;
 import io.temporal.worker.Worker;
 import io.temporal.worker.WorkerFactory;
@@ -48,8 +49,14 @@ public class AccountTransferWorker {
     workerForCommonTaskQueue.registerWorkflowImplementationTypes(AccountTransferWorkflowImpl.class);
     AccountTransferActivities accountTransferActivities = new AccountTransferActivitiesImpl();
     workerForCommonTaskQueue.registerActivitiesImplementations(accountTransferActivities);
+
+    // Register lock manager workflow on separate task queue
+    Worker lockManagerWorker = factory.newWorker("LockManagerTaskQueue", workerOptions);
+    lockManagerWorker.registerWorkflowImplementationTypes(LockManagerWorkflowImpl.class);
+
     // Start all workers created by this factory.
     factory.start();
     System.out.println("Worker started for task queue: " + TASK_QUEUE);
+    System.out.println("Lock manager worker started for task queue: LockManagerTaskQueue");
   }
 }
