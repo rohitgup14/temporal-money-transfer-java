@@ -45,6 +45,7 @@ dependencies {
     // PostgreSQL database dependencies
     implementation 'org.postgresql:postgresql:42.7.1'
     implementation 'com.zaxxer:HikariCP:5.1.0'
+    testImplementation 'com.zaxxer:HikariCP:5.1.0'
 
     testImplementation "junit:junit:4.13.2"
     testImplementation "org.mockito:mockito-core:5.3.1"
