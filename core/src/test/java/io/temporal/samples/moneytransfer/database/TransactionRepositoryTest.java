@@ -149,7 +149,8 @@ public class TransactionRepositoryTest {
     Optional<TransactionEntity> found = repository.findById(transaction.getId());
     assertTrue(found.isPresent());
     assertEquals(transaction.getId(), found.get().getId());
-    assertEquals(transaction.getAmount(), found.get().getAmount());
+    // Use compareTo for BigDecimal comparison to ignore scale differences
+    assertEquals(0, transaction.getAmount().compareTo(found.get().getAmount()));
 
     // Test non-existent ID
     Optional<TransactionEntity> notFound = repository.findById("non-existent-id");

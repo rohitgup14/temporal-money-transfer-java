@@ -31,6 +31,7 @@ public class LockStatus {
   private String currentLockId;
   private List<String> queue;
   private int queueSize;
+  private boolean locked;
 
   public LockStatus() {
     this.queue = new ArrayList<>();
@@ -42,6 +43,7 @@ public class LockStatus {
     this.currentLockId = currentLockId;
     this.queue = queue != null ? queue : new ArrayList<>();
     this.queueSize = this.queue.size();
+    this.locked = currentLockHolder != null && !currentLockHolder.isEmpty();
   }
 
   public String getGroupId() {
@@ -58,6 +60,7 @@ public class LockStatus {
 
   public void setCurrentLockHolder(String currentLockHolder) {
     this.currentLockHolder = currentLockHolder;
+    this.locked = currentLockHolder != null && !currentLockHolder.isEmpty();
   }
 
   public String getCurrentLockId() {
@@ -86,7 +89,15 @@ public class LockStatus {
   }
 
   public boolean isLocked() {
-    return currentLockHolder != null && !currentLockHolder.isEmpty();
+    return locked;
+  }
+
+  public boolean getLocked() {
+    return locked;
+  }
+
+  public void setLocked(boolean locked) {
+    this.locked = locked;
   }
 
   @Override

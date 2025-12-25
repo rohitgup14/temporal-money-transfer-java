@@ -76,10 +76,10 @@ public class DatabaseConfig {
     
     // Connection test
     config.setConnectionTestQuery("SELECT 1");
-    
+
     dataSource = new HikariDataSource(config);
     log.info("Database connection pool initialized: {}", dbUrl);
-    
+
     // Initialize schema on first access
     if (!initialized) {
       initializeSchema();
