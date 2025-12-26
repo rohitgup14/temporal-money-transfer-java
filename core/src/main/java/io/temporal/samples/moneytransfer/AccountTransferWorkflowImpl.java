@@ -26,6 +26,7 @@ import io.temporal.failure.ActivityFailure;
 import io.temporal.failure.ApplicationFailure;
 import io.temporal.samples.moneytransfer.dataclasses.*;
 import io.temporal.samples.moneytransfer.web.ServerInfo;
+import io.temporal.workflow.ChildWorkflowOptions;
 import io.temporal.workflow.Workflow;
 import java.time.Duration;
 import org.slf4j.Logger;
@@ -51,6 +52,18 @@ public class AccountTransferWorkflowImpl implements AccountTransferWorkflow {
   // activity stub
   private final AccountTransferActivities accountTransferActivities =
       Workflow.newActivityStub(AccountTransferActivities.class, options);
+
+  // child workflow options for EntityWorkflow
+  private final ChildWorkflowOptions entityWorkflowOptions =
+      ChildWorkflowOptions.newBuilder()
+          .setTaskQueue(ServerInfo.getTaskqueue())
+          .setWorkflowExecutionTimeout(Duration.ofMinutes(10))
+          .build();
+
+  // child workflow stub for EntityWorkflow
+  private EntityWorkflow newEntityWorkflowStub() {
+    return Workflow.newChildWorkflowStub(EntityWorkflow.class, entityWorkflowOptions);
+  }
 
   // these variables are reflected in the UI
   private int progressPercentage = 10;
@@ -126,10 +139,21 @@ public class AccountTransferWorkflowImpl implements AccountTransferWorkflow {
 
     try {
       String idempotencyKey = Workflow.randomUUID().toString();
-      // deposit activity
-      chargeResult =
+      
+      // Call deposit activity to get charge response (handles business logic like INVALID_ACCOUNT)
+      ChargeResponseObj depositResponse =
           accountTransferActivities.deposit(
               idempotencyKey, params.getAmount(), params.getScenario());
+      
+      // Call EntityWorkflow as child workflow to handle idempotency checking and locking
+      EntityWorkflow entityWorkflow = newEntityWorkflowStub();
+      chargeResult =
+          entityWorkflow.handleDepositTransaction(
+              idempotencyKey,
+              Workflow.getInfo().getWorkflowId(),
+              params.getAmount(),
+              depositResponse.getChargeId(),
+              params.getScenario() != null ? params.getScenario().name() : null);
     }
     // if deposit() fails in an unrecoverable way, rollback the withdrawal and fail the workflow
     catch (ActivityFailure e) {

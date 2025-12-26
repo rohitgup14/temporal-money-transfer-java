@@ -46,9 +46,12 @@ public class AccountTransferWorker {
     // worker factory that can be used to create workers for specific task queues
     WorkerFactory factory = WorkerFactory.newInstance(TemporalClient.get());
     Worker workerForCommonTaskQueue = factory.newWorker(TASK_QUEUE, workerOptions);
-    workerForCommonTaskQueue.registerWorkflowImplementationTypes(AccountTransferWorkflowImpl.class);
+    workerForCommonTaskQueue.registerWorkflowImplementationTypes(
+        AccountTransferWorkflowImpl.class, EntityWorkflowImpl.class);
     AccountTransferActivities accountTransferActivities = new AccountTransferActivitiesImpl();
-    workerForCommonTaskQueue.registerActivitiesImplementations(accountTransferActivities);
+    EntityActivities entityActivities = new EntityActivitiesImpl();
+    workerForCommonTaskQueue.registerActivitiesImplementations(
+        accountTransferActivities, entityActivities);
 
     // Register lock manager workflow on separate task queue
     Worker lockManagerWorker = factory.newWorker("LockManagerTaskQueue", workerOptions);
