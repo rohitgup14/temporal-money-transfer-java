@@ -122,7 +122,16 @@ public class AccountTransferWorkflowImpl implements AccountTransferWorkflow {
       Workflow.sleep(Duration.ofSeconds(5)); // for dramatic effect
     }
 
+    // Call withdraw activity for business logic (e.g., API_DOWNTIME scenario)
     accountTransferActivities.withdraw(params.getAmount(), params.getScenario());
+    
+    // Call EntityWorkflow as child workflow to handle transaction persistence with locking
+    EntityWorkflow entityWorkflow = newEntityWorkflowStub();
+    entityWorkflow.handleWithdrawTransaction(
+        Workflow.getInfo().getWorkflowId(),
+        params.getAmount(),
+        params.getScenario() != null ? params.getScenario().name() : null);
+    
     Workflow.sleep(Duration.ofSeconds(2)); // for dramatic effect
 
     // Simulate bug in workflow
@@ -146,7 +155,6 @@ public class AccountTransferWorkflowImpl implements AccountTransferWorkflow {
               idempotencyKey, params.getAmount(), params.getScenario());
       
       // Call EntityWorkflow as child workflow to handle idempotency checking and locking
-      EntityWorkflow entityWorkflow = newEntityWorkflowStub();
       chargeResult =
           entityWorkflow.handleDepositTransaction(
               idempotencyKey,
@@ -159,8 +167,14 @@ public class AccountTransferWorkflowImpl implements AccountTransferWorkflow {
     catch (ActivityFailure e) {
       log.info("\n\nDeposit failed unrecoverably, reverting withdraw\n\n");
 
-      // undoWithdraw activity (rollback)
+      // Call undoWithdraw activity for business logic
       accountTransferActivities.undoWithdraw(params.getAmount());
+      
+      // Call EntityWorkflow as child workflow to handle undo withdraw transaction with locking
+      EntityWorkflow entityWorkflowForUndo = newEntityWorkflowStub();
+      entityWorkflowForUndo.handleUndoWithdrawTransaction(
+          Workflow.getInfo().getWorkflowId(),
+          params.getAmount());
 
       // return failure message
       String message = ((ApplicationFailure) e.getCause()).getOriginalMessage();
