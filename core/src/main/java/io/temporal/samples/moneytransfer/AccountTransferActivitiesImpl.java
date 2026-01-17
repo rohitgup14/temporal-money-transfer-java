@@ -60,6 +60,7 @@ public class AccountTransferActivitiesImpl implements AccountTransferActivities 
     ActivityExecutionContext ctx = Activity.getExecutionContext();
     ActivityInfo info = ctx.getInfo();
 
+    // Business logic (transaction persistence with locking is handled by EntityWorkflow)
     if (scenario == ExecutionScenarioObj.API_DOWNTIME) {
       log.info("\n\n*** Simulating API Downtime\n");
       if (info.getAttempt() < 5) {
@@ -79,14 +80,15 @@ public class AccountTransferActivitiesImpl implements AccountTransferActivities 
 
     log.info("\n\nAPI /deposit amount = " + amountDollars + " \n");
 
+    // Business logic validation (idempotency checking and locking are handled by EntityWorkflow)
     if (scenario == ExecutionScenarioObj.INVALID_ACCOUNT) {
       InvalidAccountException invalidAccountException =
           new InvalidAccountException("Invalid Account");
       throw Activity.wrap(invalidAccountException);
     }
 
+    // Return charge response (transaction persistence with locking is handled by EntityWorkflow)
     ChargeResponseObj response = new ChargeResponseObj("example-charge-id");
-
     return response;
   }
 
@@ -94,6 +96,7 @@ public class AccountTransferActivitiesImpl implements AccountTransferActivities 
   public boolean undoWithdraw(float amountDollars) {
     log.info("\n\nAPI /undoWithdraw amount = " + amountDollars + " \n");
 
+    // Business logic (transaction persistence with locking is handled by EntityWorkflow)
     return true;
   }
 

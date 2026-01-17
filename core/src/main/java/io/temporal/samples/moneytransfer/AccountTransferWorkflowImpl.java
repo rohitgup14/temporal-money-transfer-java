@@ -26,6 +26,7 @@ import io.temporal.failure.ActivityFailure;
 import io.temporal.failure.ApplicationFailure;
 import io.temporal.samples.moneytransfer.dataclasses.*;
 import io.temporal.samples.moneytransfer.web.ServerInfo;
+import io.temporal.workflow.ChildWorkflowOptions;
 import io.temporal.workflow.Workflow;
 import java.time.Duration;
 import org.slf4j.Logger;
@@ -51,6 +52,18 @@ public class AccountTransferWorkflowImpl implements AccountTransferWorkflow {
   // activity stub
   private final AccountTransferActivities accountTransferActivities =
       Workflow.newActivityStub(AccountTransferActivities.class, options);
+
+  // child workflow options for EntityWorkflow
+  private final ChildWorkflowOptions entityWorkflowOptions =
+      ChildWorkflowOptions.newBuilder()
+          .setTaskQueue(ServerInfo.getTaskqueue())
+          .setWorkflowExecutionTimeout(Duration.ofMinutes(10))
+          .build();
+
+  // child workflow stub for EntityWorkflow
+  private EntityWorkflow newEntityWorkflowStub() {
+    return Workflow.newChildWorkflowStub(EntityWorkflow.class, entityWorkflowOptions);
+  }
 
   // these variables are reflected in the UI
   private int progressPercentage = 10;
@@ -109,7 +122,16 @@ public class AccountTransferWorkflowImpl implements AccountTransferWorkflow {
       Workflow.sleep(Duration.ofSeconds(5)); // for dramatic effect
     }
 
+    // Call withdraw activity for business logic (e.g., API_DOWNTIME scenario)
     accountTransferActivities.withdraw(params.getAmount(), params.getScenario());
+    
+    // Call EntityWorkflow as child workflow to handle transaction persistence with locking
+    EntityWorkflow entityWorkflow = newEntityWorkflowStub();
+    entityWorkflow.handleWithdrawTransaction(
+        Workflow.getInfo().getWorkflowId(),
+        params.getAmount(),
+        params.getScenario() != null ? params.getScenario().name() : null);
+    
     Workflow.sleep(Duration.ofSeconds(2)); // for dramatic effect
 
     // Simulate bug in workflow
@@ -126,17 +148,33 @@ public class AccountTransferWorkflowImpl implements AccountTransferWorkflow {
 
     try {
       String idempotencyKey = Workflow.randomUUID().toString();
-      // deposit activity
-      chargeResult =
+      
+      // Call deposit activity to get charge response (handles business logic like INVALID_ACCOUNT)
+      ChargeResponseObj depositResponse =
           accountTransferActivities.deposit(
               idempotencyKey, params.getAmount(), params.getScenario());
+      
+      // Call EntityWorkflow as child workflow to handle idempotency checking and locking
+      chargeResult =
+          entityWorkflow.handleDepositTransaction(
+              idempotencyKey,
+              Workflow.getInfo().getWorkflowId(),
+              params.getAmount(),
+              depositResponse.getChargeId(),
+              params.getScenario() != null ? params.getScenario().name() : null);
     }
     // if deposit() fails in an unrecoverable way, rollback the withdrawal and fail the workflow
     catch (ActivityFailure e) {
       log.info("\n\nDeposit failed unrecoverably, reverting withdraw\n\n");
 
-      // undoWithdraw activity (rollback)
+      // Call undoWithdraw activity for business logic
       accountTransferActivities.undoWithdraw(params.getAmount());
+      
+      // Call EntityWorkflow as child workflow to handle undo withdraw transaction with locking
+      EntityWorkflow entityWorkflowForUndo = newEntityWorkflowStub();
+      entityWorkflowForUndo.handleUndoWithdrawTransaction(
+          Workflow.getInfo().getWorkflowId(),
+          params.getAmount());
 
       // return failure message
       String message = ((ApplicationFailure) e.getCause()).getOriginalMessage();
